@@ -304,45 +304,61 @@ def process_pdf(pdf_path):
                     
                 page_data["raw_ocr_text"] = "\n\n".join(full_text)
 
-            # 2. Extract Tables (Camelot)
+            # 2. Extract Tables (Camelot) - Only lattice for bordered tables
             try:
+                # Only use lattice flavor for tables with clear borders
                 tables = camelot.read_pdf(pdf_path, pages=str(page_num), flavor='lattice')
-                if not tables:
-                    tables = camelot.read_pdf(pdf_path, pages=str(page_num), flavor='stream')
                 
+                valid_tables = 0
                 for t_idx, table in enumerate(tables):
-                    # Camelot bbox is x0, y0, x1, y1 (bottom-left origin usually? No, PDF coordinates)
-                    # We need to check camelot bbox format. It's usually PDF coords.
-                    # We want [x, y, w, h] top-left origin.
-                    # Let's approximate or just use what we have.
-                    
-                    # Convert table to dict
+                    # Very strict filtering for real tables
+                    confidence = table.accuracy / 100.0
+                    if confidence < 0.8:  # Only high-confidence tables
+                        continue
+                        
                     df = table.df
                     rows = df.values.tolist()
+                    
+                    # Must have at least 2 rows and 2 columns for a real table
+                    if len(rows) < 2 or (rows and len(rows[0]) < 2):
+                        continue
+                    
+                    # Check for proper table structure - multiple columns with data
+                    cols_with_data = 0
+                    for col_idx in range(len(rows[0]) if rows else 0):
+                        col_has_data = any(str(rows[row_idx][col_idx]).strip() for row_idx in range(len(rows)))
+                        if col_has_data:
+                            cols_with_data += 1
+                    
+                    if cols_with_data < 2:  # Must have at least 2 columns with data
+                        continue
+                    
+                    # Skip if it's mostly single-column content (likely text, not table)
+                    non_empty_cells = sum(1 for row in rows for cell in row if str(cell).strip())
+                    total_cells = len(rows) * len(rows[0]) if rows else 0
+                    if total_cells == 0 or non_empty_cells / total_cells < 0.3:  # At least 30% filled
+                        continue
+                    
                     headers = rows[0] if rows else []
                     
                     # BBox conversion
-                    # table._bbox is (x0, y0, x1, y1) in PDF coords (bottom-left 0,0)
-                    # We need to flip Y.
                     c_bbox = table._bbox
-                    # x0, y0 (bottom), x1, y1 (top)
-                    # Top-left origin: x = x0, y = height - y1, w = x1-x0, h = y1-y0
-                    
                     t_x = c_bbox[0]
                     t_y = height - c_bbox[3]
                     t_w = c_bbox[2] - c_bbox[0]
                     t_h = c_bbox[3] - c_bbox[1]
                     
                     page_data["tables"].append({
-                        "table_id": f"t{metadata['total_tables'] + t_idx + 1}",
+                        "table_id": f"t{metadata['total_tables'] + valid_tables + 1}",
                         "bbox": [round(t_x, 2), round(t_y, 2), round(t_w, 2), round(t_h, 2)],
                         "rows": rows,
                         "headers": headers,
                         "extracted_by": "camelot",
-                        "confidence": table.accuracy / 100.0
+                        "confidence": confidence
                     })
+                    valid_tables += 1
                 
-                metadata["total_tables"] += len(tables)
+                metadata["total_tables"] += valid_tables
             except Exception as e:
                 print(f"Table extraction failed: {e}")
 
