@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pytesseract
+pdf2image
+camelot-py[cv]
+opencv-python
+pillow
+PyMuPDF
+pdfplumber
+python-multipart
